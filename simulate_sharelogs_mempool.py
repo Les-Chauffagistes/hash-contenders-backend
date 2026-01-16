@@ -72,13 +72,12 @@ def random_btc_address() -> str:
     return "bc1q" + "".join(random.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(50))
 
 
-def random_username() -> str:
+def random_worker() -> str:
     base = random.choice([
         "timixx", "Alan", "Snafus", "Montagnole", "eufo", "BRM1", "binuts",
         "Durdur33", "heimrichdab", "Brucewayne", "Meier_Link", "nanoJ", "bitaxe",
         "worker", "NerdQaxe", "MoghRoith13"
     ])
-    # parfois suffixe numérique (timixx2, etc.)
     if random.random() < 0.25:
         return f"{base}{random.randint(2, 9)}"
     return base
@@ -87,10 +86,10 @@ def random_username() -> str:
 @dataclass(frozen=True)
 class Connection:
     clientid: int
-    ip_address: str     # champ "address"
-    btc_address: str    # partie avant le point dans workername
-    username: str       # champ "username" (suffix)
-    workername: str     # "{btc_address}.{username}"
+    ip_address: str   # champ "address" dans le sharelog (IP mineur)
+    btc_address: str  # adresse BTC (ton "user réel")
+    worker: str       # suffixe (ton "worker name")
+    workername: str   # "{btc_address}.{worker}"
     agent: str
 
 
@@ -98,8 +97,8 @@ def make_connections(
     n_users_ip: int,
     min_btc_per_ip: int,
     max_btc_per_ip: int,
-    min_usernames_per_btc: int,
-    max_usernames_per_btc: int,
+    min_workers_per_btc: int,
+    max_workers_per_btc: int,
     min_agents_per_pair: int,
     max_agents_per_pair: int,
     clientid_start: int,
@@ -115,30 +114,30 @@ def make_connections(
         btc_addresses = [random_btc_address() for _ in range(btc_count)]
 
         for btc in btc_addresses:
-            uname_count = random.randint(min_usernames_per_btc, max_usernames_per_btc)
-            usernames = []
+            worker_count = random.randint(min_workers_per_btc, max_workers_per_btc)
+            workers: List[str] = []
             used = set()
-            for _u in range(uname_count):
-                u = random_username()
+            for _w in range(worker_count):
+                w = random_worker()
                 tries = 0
-                while u in used and tries < 10:
-                    u = random_username()
+                while w in used and tries < 10:
+                    w = random_worker()
                     tries += 1
-                used.add(u)
-                usernames.append(u)
+                used.add(w)
+                workers.append(w)
 
-            for u in usernames:
-                # (ip, btc, username) peut avoir plusieurs agents => plusieurs clientid
+            for w in workers:
+                # (ip, btc, worker) peut avoir plusieurs agents => plusieurs clientid
                 agent_count = random.randint(min_agents_per_pair, max_agents_per_pair)
                 agents = random.sample(agent_keys, k=min(agent_count, len(agent_keys)))
 
                 for agent in agents:
-                    workername = f"{btc}.{u}"
+                    workername = f"{btc}.{w}"
                     conns.append(Connection(
                         clientid=clientid,
                         ip_address=ip,
                         btc_address=btc,
-                        username=u,
+                        worker=w,
                         workername=workername,
                         agent=agent,
                     ))
@@ -174,9 +173,14 @@ def mk_share(conn: Connection, fixed_ntime: Optional[str], workinfoid_bits: int)
         "createby": "code",
         "createcode": "parse_submit",
         "createinet": "0.0.0.0:3333",
-        # IMPORTANT: workername = btc.username ; username = suffix (ex: timixx)
-        "workername": conn.workername,
-        "username": conn.username,
+
+        # ✅ MATCH TON WS :
+        # - o.username = adresse BTC (param "address" côté WS)
+        # - o.workername = "adresseBTC.worker" (param "worker" => suffixe)
+        "workername": conn.workername,   # "btc.worker"
+        "username": conn.btc_address,    # adresse BTC (user réel)
+
+        # logs ckpool: "address" = IP du mineur
         "address": conn.ip_address,
         "agent": conn.agent,
     }
@@ -186,19 +190,26 @@ def mk_share(conn: Connection, fixed_ntime: Optional[str], workinfoid_bits: int)
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Simule sharelogs ckpool-like: ~3-4 shares/s, 1 fichier/min, round = tip+1, username=suffix")
+    p = argparse.ArgumentParser(
+        description="Simule sharelogs ckpool-like: ~3-4 shares/s, 1 fichier/min, round = tip+1, username=btc_address, worker=suffix dans workername"
+    )
     p.add_argument("--base-dir", default="./ckpool/logs")
     p.add_argument("--poll-seconds", type=int, default=5)
     p.add_argument("--http-timeout", type=int, default=10)
     p.add_argument("--shares-per-sec", type=float, default=3.5)
     p.add_argument("--sharelog-interval-seconds", type=int, default=60)
     p.add_argument("--users-ip", type=int, default=60, help="Nb de users reels (IP distinctes)")
+
     p.add_argument("--min-btc-per-ip", type=int, default=1)
     p.add_argument("--max-btc-per-ip", type=int, default=3)
-    p.add_argument("--min-usernames-per-btc", type=int, default=1)
-    p.add_argument("--max-usernames-per-btc", type=int, default=3)
-    p.add_argument("--min-agents-per-pair", type=int, default=1, help="agents par (ip, btc, username)")
+
+    # renommé: workers au lieu de usernames
+    p.add_argument("--min-workers-per-btc", type=int, default=1)
+    p.add_argument("--max-workers-per-btc", type=int, default=3)
+
+    p.add_argument("--min-agents-per-pair", type=int, default=1, help="agents par (ip, btc, worker)")
     p.add_argument("--max-agents-per-pair", type=int, default=2)
+
     p.add_argument("--clientid-start", type=int, default=564466077000000)
     p.add_argument("--fixed-ntime", default=None)
     p.add_argument("--workinfoid-bits", type=int, default=63)
@@ -217,15 +228,14 @@ def main() -> int:
         n_users_ip=args.users_ip,
         min_btc_per_ip=args.min_btc_per_ip,
         max_btc_per_ip=args.max_btc_per_ip,
-        min_usernames_per_btc=args.min_usernames_per_btc,
-        max_usernames_per_btc=args.max_usernames_per_btc,
+        min_workers_per_btc=args.min_workers_per_btc,
+        max_workers_per_btc=args.max_workers_per_btc,
         min_agents_per_pair=args.min_agents_per_pair,
         max_agents_per_pair=args.max_agents_per_pair,
         clientid_start=args.clientid_start,
     )
 
     print(f"[start] base-dir={args.base_dir} shares/s~{args.shares_per_sec} sharelog_every={args.sharelog_interval_seconds}s conns={len(conns)} tip_api={TIP_URL}")
-    # cadence
     period = 1.0 / max(0.1, args.shares_per_sec)
     next_share_at = time.time()
 
@@ -275,10 +285,10 @@ def main() -> int:
                 prefix8 = f"{int(time.time()):08x}"[-8:]
                 fname = sharelog_filename(prefix8, file_counter)
                 file_counter += 1
-                path = os.path.join(rdir, fname)
-                fh = open(path, "w", encoding="utf-8")
+                fpath = os.path.join(rdir, fname)
+                fh = open(fpath, "w", encoding="utf-8")
                 file_opened_at = now
-                print(f"[new sharelog] {path}")
+                print(f"[new sharelog] {fpath}")
 
             # Rate limit shares
             if now < next_share_at:

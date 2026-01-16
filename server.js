@@ -55,12 +55,38 @@ function parseCreatedateToEpochSeconds(createdate) {
   return Number.isFinite(n) ? n : null;
 }
 
+// workername peut être:
+// - "bc1q..."
+// - "bc1q....Rig1"
+// - parfois (selon outils) juste "Rig1" (rare)
+function splitWorkername(workername) {
+  if (!workername) return { addrPart: null, workerPart: null };
+  const s = String(workername).trim();
+  const idx = s.indexOf(".");
+  if (idx === -1) return { addrPart: s, workerPart: null };
+  return {
+    addrPart: s.slice(0, idx),
+    workerPart: s.slice(idx + 1),
+  };
+}
+
 function parseShareLineJSON(line) {
   const s = line.trim();
   if (!s) return null;
   if (s[0] !== "{") return null;
+
   try {
     const o = JSON.parse(s);
+
+    // ✅ Normalisation :
+    // - address = o.username (adresse “réelle” chez toi)
+    // - workername = o.workername (peut contenir "addr.worker")
+    // - worker = suffixe après le "." dans workername (si présent)
+    const { addrPart: wnAddrPart, workerPart } = splitWorkername(o.workername);
+
+    const address = o.username ?? null; // <- ton "adresse user"
+    const worker = workerPart ?? null;  // <- ton "worker name" (suffixe)
+
     return {
       workinfoid: o.workinfoid,
       clientid: o.clientid,
@@ -71,8 +97,16 @@ function parseShareLineJSON(line) {
       errn: o.errn ?? null,
       createdate: o.createdate ?? null,
       ts: parseCreatedateToEpochSeconds(o.createdate) ?? (Date.now() / 1000),
+
+      // champs bruts
       workername: o.workername ?? null,
       username: o.username ?? null,
+
+      // ✅ champs normalisés pour ton usage
+      address,              // == username
+      worker,               // == suffixe du workername
+      workernameAddr: wnAddrPart ?? null, // juste pour debug éventuel
+
       ip: o.address ?? null, // dans tes logs "address" = IP du mineur
       agent: o.agent ?? null,
       rejectReason: o["reject-reason"] ?? null,
@@ -83,36 +117,33 @@ function parseShareLineJSON(line) {
   }
 }
 
-function splitWorkername(workername) {
-  // "bc1q...xyz.Meier_Link" -> { addrPart, userPart }
-  if (!workername) return { addrPart: null, userPart: null };
-  const idx = workername.indexOf(".");
-  if (idx === -1) return { addrPart: workername, userPart: null };
-  return {
-    addrPart: workername.slice(0, idx),
-    userPart: workername.slice(idx + 1),
-  };
-}
-
+/**
+ * Règles de matching demandées :
+ * - l’abonnement passe `address=...` (une adresse)
+ * - optionnellement `worker=...` (précision)
+ *
+ * Donc :
+ * 1) on match sur `share.address` (qui est o.username)
+ * 2) si worker demandé, on compare au suffixe dans `share.workername` ("addr.worker")
+ *    -> en pratique `share.worker` calculé ci-dessus.
+ */
 function shareMatches(share, sub) {
-  const wn = share.workername;
-  if (!wn) return false;
+  const addr = safeLower(share.address);
+  if (!addr) return false;
 
-  const { addrPart, userPart } = splitWorkername(wn);
-  if (!addrPart) return false;
+  if (addr !== sub.addressLower) return false;
 
-  const addrLower = safeLower(addrPart);
-  if (addrLower !== sub.addressPartLower) return false;
-
+  // worker = précision optionnelle
   if (sub.workerLower) {
-    const uLower = safeLower(share.username || userPart);
-    if (uLower !== sub.workerLower) return false;
+    const w = safeLower(share.worker); // suffixe du workername
+    if (!w) return false;
+    if (w !== sub.workerLower) return false;
   }
 
   return true;
 }
 
-// ---- WS rate limit / conn limit (in-memory) ----
+// ---- WS rate limit / connection limits (in-memory) ----
 function getClientIp(req) {
   if (TRUST_PROXY) {
     const xff = (req.headers["x-forwarded-for"] || "").toString();
@@ -217,7 +248,7 @@ class ShareLogWatcher {
       .map((d) => path.join(dir, d.name))
       .sort();
   }
- 
+
   readNewLines(filePath) {
     let st;
     try {
@@ -428,12 +459,16 @@ function streamHistory(ws, sub) {
 }
 
 wss.on("connection", (ws, _req, url) => {
+  // ✅ address = adresse (celle des logs dans o.username)
   const addressParam = safeLower(url.searchParams.get("address"));
+
+  // ✅ worker = suffixe du workername (après le ".") -> ex: "LAPB"
   const workerParam = safeLower(url.searchParams.get("worker"));
+
   const minutesParam = Number(url.searchParams.get("minutes") || HISTORY_DEFAULT_MIN);
 
   if (!addressParam) {
-    ws.close(1008, "Missing address param (use bc1... part before the dot)");
+    ws.close(1008, "Missing address param (use the mining address, matches share.username)");
     return;
   }
 
@@ -443,7 +478,7 @@ wss.on("connection", (ws, _req, url) => {
   );
 
   const sub = {
-    addressPartLower: addressParam,
+    addressLower: addressParam,
     workerLower: workerParam || null,
     minutes,
     createdAt: Date.now(),
@@ -494,5 +529,7 @@ const HOST = process.env.HOST || "127.0.0.1";
 server.listen(PORT, HOST, () => {
   console.log(`[ws] listening on ${HOST}:${PORT}`);
   console.log(`[ws] logs dir: ${LOGS_DIR}`);
-  console.log(`[ws] example: ws://HOST:${PORT}/ws/shares?address=bc1q...&worker=Meier_Link&minutes=10`);
+  console.log(
+    `[ws] example: ws://HOST:${PORT}/ws/shares?address=bc1q...&worker=LAPB&minutes=10`,
+  );
 });
