@@ -18,6 +18,7 @@
   },
   "homepage": "https://github.com/Les-Chauffagistes/hash-contenders-backend#readme",
   "dependencies": {
+    "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "ws": "^8.19.0"
   }

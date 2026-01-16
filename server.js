@@ -6,6 +6,7 @@ const path = require("path");
 const http = require("http");
 const express = require("express");
 const WebSocket = require("ws");
+require("dotenv").config();
 
 // =====================
 // CONFIG
@@ -18,6 +19,8 @@ const MAX_LINES_PER_TICK = Number(process.env.MAX_LINES_PER_TICK || 10000);
 const HISTORY_DEFAULT_MIN = Number(process.env.HISTORY_DEFAULT_MIN || 10);
 const HISTORY_MAX_MIN = Number(process.env.HISTORY_MAX_MIN || 120); // évite scan 24h par accident
 const MAX_HISTORY_FILES = Number(process.env.MAX_HISTORY_FILES || 200); // évite d'ouvrir trop de fichiers
+const WS_TOKEN = process.env.WS_TOKEN || "";
+
 
 // =====================
 // HELPERS
@@ -276,6 +279,25 @@ server.on("upgrade", (req, socket, head) => {
     socket.destroy();
     return;
   }
+
+  // 🔐 Authorization: Bearer <token>
+  const expected = WS_TOKEN;
+  if (!expected) {
+    // si tu veux forcer qu'il y ait toujours un token côté env, refuse si absent
+    socket.write("HTTP/1.1 500 Server Misconfigured\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+
+  const auth = (req.headers["authorization"] || "").toString();
+  const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+
+  if (token !== expected) {
+    socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+
   wss.handleUpgrade(req, socket, head, (ws) => {
     wss.emit("connection", ws, req, url);
   });
