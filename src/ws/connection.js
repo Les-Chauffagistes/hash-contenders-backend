@@ -8,10 +8,6 @@ function buildSubscription(url, limits) {
   const workerParam = safeLower(url.searchParams.get("worker"));
   const minutesParam = Number(url.searchParams.get("minutes") || limits.HISTORY_DEFAULT_MIN);
 
-  if (!addressParam) {
-    return { ok: false, code: 1008, reason: "Missing address param (matches share.username)" };
-  }
-
   const minutes = Math.max(
     0,
     Math.min(
@@ -23,7 +19,7 @@ function buildSubscription(url, limits) {
   return {
     ok: true,
     sub: {
-      addressLower: addressParam,
+      addressLower: addressParam || null, // ⬅️ devient optionnel
       workerLower: workerParam || null,
       minutes,
       createdAt: Date.now(),
@@ -42,7 +38,13 @@ function onWsConnectionFactory({ clients, watcher, limits, guards }) {
     const sub = subRes.sub;
     clients.set(ws, sub);
 
-    sendJSON(ws, { type: "hello", address: sub.addressLower, worker: sub.workerLower, minutes: sub.minutes });
+    sendJSON(ws, {
+      type: "hello",
+      address: sub.addressLower,
+      worker: sub.workerLower,
+      minutes: sub.minutes,
+      mode: sub.addressLower ? "filtered" : "global",
+    });
 
     try {
       streamHistory(ws, sub, watcher);
